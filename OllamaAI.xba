@@ -1,0 +1,746 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
+<script:module xmlns:script="http://openoffice.org/2000/script" script:name="OllamaAI" script:language="StarBasic">Attribute VB_Name = &quot;OllamaAI&quot;
+REM  ****  BASIC  ****
+
+&apos;====================================================================
+&apos; Ollama LibreOffice AI - Local AI Document Assistant for LibreOffice
+&apos; Version 1.0.0
+&apos;
+&apos; Single-file Basic module. No class modules, no external dependencies.
+&apos;
+&apos; Adapted from Ollama Outlook AI v1.1.1 by cdblue999
+&apos;
+&apos; Requirements:
+&apos;   - Ollama running at http://localhost:11434
+&apos;   - At least one model pulled (e.g., llama3.2:3b)
+&apos;   - LibreOffice 7.x or later
+&apos;   - Windows (uses COM for HTTP, registry, shell)
+&apos;
+&apos; All processing is fully local. No data leaves your machine.
+&apos;====================================================================
+
+Option Explicit
+
+&apos;====================================================================
+&apos; Constants
+&apos;====================================================================
+Private Const APP_NAME As String = &quot;OllamaLibreOfficeAI&quot;
+Private Const APP_VERSION As String = &quot;1.0.0&quot;
+Private Const OLLAMA_BASE_URL As String = &quot;http://localhost:11434&quot;
+Private Const OLLAMA_DEFAULT_MODEL As String = &quot;llama3.2:3b&quot;
+Private Const REQUEST_TIMEOUT_SECS As Long = 120
+Private Const REG_PATH_ROOT As String = &quot;HKEY_CURRENT_USER\Software\OllamaLibreOfficeAI&quot;
+
+&apos;====================================================================
+&apos; Initialization - Run once after import to create default settings
+&apos;====================================================================
+Public Sub Ollama_Initialize()
+    On Error Resume Next
+
+    Dim testVal As String
+    testVal = GetRegSetting(&quot;Model&quot;, &quot;&quot;)
+    If testVal = &quot;&quot; Then
+        SaveRegSetting &quot;Model&quot;, OLLAMA_DEFAULT_MODEL
+        SaveRegSetting &quot;Prompt&quot;, &quot;You are a helpful document assistant. Analyze the document content and respond professionally. Keep your response concise and well-structured.&quot;
+        SaveRegSetting &quot;Timeout&quot;, CStr(REQUEST_TIMEOUT_SECS)
+    End If
+
+    MsgBox APP_NAME &amp; &quot; v&quot; &amp; APP_VERSION &amp; &quot; initialized.&quot; &amp; vbCrLf &amp; vbCrLf &amp; &quot;Run Tools &gt; Macros &gt; Ollama_ProcessDocument to use.&quot;, vbInformation, APP_NAME
+End Sub
+
+&apos;====================================================================
+&apos; Health Check - Is Ollama Running?
+&apos;====================================================================
+Public Function Ollama_IsOllamaRunning() As Boolean
+    On Error GoTo NotRunning
+    Dim http As Object
+    Set http = CreateObject(&quot;WinHttp.WinHttpRequest.5.1&quot;)
+    http.Open &quot;GET&quot;, OLLAMA_BASE_URL &amp; &quot;/api/tags&quot;, False
+    http.SetTimeouts 5000, 5000, 5000, 5000
+    http.SetOption 0, &quot;Ollama-LibreOffice-AI/1.0&quot;
+    http.Send
+    Ollama_IsOllamaRunning = (http.Status = 200)
+    Exit Function
+NotRunning:
+    Ollama_IsOllamaRunning = False
+End Function
+
+&apos;====================================================================
+&apos; Refresh AI Models List (fetches from Ollama)
+&apos;====================================================================
+Public Sub Ollama_RefreshModelsList()
+    On Error GoTo RefreshError
+    Dim http As Object
+    Set http = CreateObject(&quot;WinHttp.WinHttpRequest.5.1&quot;)
+    http.Open &quot;GET&quot;, OLLAMA_BASE_URL &amp; &quot;/api/tags&quot;, False
+    http.SetTimeouts 5000, 5000, 5000, 5000
+    http.SetOption 0, &quot;Ollama-LibreOffice-AI/1.0&quot;
+    http.Send
+
+    If http.Status = 200 Then
+        Dim json As String
+        json = http.ResponseText
+        Dim models As String
+        models = ExtractModelNames(json)
+        If models &lt;&gt; &quot;&quot; Then
+            SaveRegSetting &quot;AvailableModels&quot;, models
+        Else
+            SaveRegSetting &quot;AvailableModels&quot;, OLLAMA_DEFAULT_MODEL
+        End If
+    Else
+        SaveRegSetting &quot;AvailableModels&quot;, OLLAMA_DEFAULT_MODEL
+    End If
+    Exit Sub
+
+RefreshError:
+    SaveRegSetting &quot;AvailableModels&quot;, OLLAMA_DEFAULT_MODEL
+End Sub
+
+&apos;====================================================================
+&apos; Extract model names from Ollama API JSON response
+&apos;====================================================================
+Private Function ExtractModelNames(ByVal json As String) As String
+    On Error Resume Next
+    Dim result As String
+    result = &quot;&quot;
+
+    Dim modelsStart As Long
+    modelsStart = InStr(json, &quot;&quot;&quot;models&quot;&quot;:&quot;)
+    If modelsStart = 0 Then
+        ExtractModelNames = OLLAMA_DEFAULT_MODEL
+        Exit Function
+    End If
+
+    Dim searchPos As Long
+    Dim nameStart As Long
+    Dim nameEnd As Long
+    Dim modelName As String
+    searchPos = modelsStart
+
+    Do
+        nameStart = InStr(searchPos, json, &quot;&quot;&quot;name&quot;&quot;:&quot;&quot;&quot;)
+        If nameStart = 0 Or nameStart &gt; modelsStart + 5000 Then Exit Do
+        nameStart = nameStart + 8
+        nameEnd = InStr(nameStart, json, &quot;&quot;&quot;&quot;)
+        If nameEnd = 0 Then Exit Do
+        modelName = Mid(json, nameStart, nameEnd - nameStart)
+        If result &lt;&gt; &quot;&quot; Then result = result &amp; &quot;,&quot;
+        result = result &amp; modelName
+        searchPos = nameEnd + 1
+    Loop
+
+    If result = &quot;&quot; Then result = OLLAMA_DEFAULT_MODEL
+    ExtractModelNames = result
+End Function
+
+&apos;====================================================================
+&apos; Main AI Processing - Entry point for document processing
+&apos;====================================================================
+Public Sub Ollama_ProcessDocument()
+    On Error GoTo ProcessError
+
+    If Not Ollama_IsOllamaRunning() Then
+        MsgBox &quot;Ollama is not running.&quot; &amp; vbCrLf &amp; vbCrLf &amp; &quot;Please start Ollama and try again.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    Dim doc As Object
+    doc = ThisComponent
+
+    If doc Is Nothing Then
+        MsgBox &quot;No document is open.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    Dim docText As String
+    Dim docType As String
+
+    If doc.supportsService(&quot;com.sun.star.text.TextDocument&quot;) Then
+        docType = &quot;Writer&quot;
+        docText = GetWriterDocumentText(doc)
+    ElseIf doc.supportsService(&quot;com.sun.star.sheet.SpreadsheetDocument&quot;) Then
+        docType = &quot;Calc&quot;
+        docText = GetCalcDocumentText(doc)
+    ElseIf doc.supportsService(&quot;com.sun.star.presentation.PresentationDocument&quot;) Then
+        docType = &quot;Impress&quot;
+        docText = GetImpressDocumentText(doc)
+    Else
+        MsgBox &quot;Unsupported document type. Only Writer, Calc, and Impress are supported.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    If docText = &quot;&quot; Then
+        MsgBox &quot;No text content found in the document.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    If Len(docText) &gt; 50000 Then
+        docText = Left(docText, 50000)
+    End If
+
+    Dim modelName As String
+    Dim systemPrompt As String
+    Dim timeoutSecs As Long
+
+    modelName = GetRegSetting(&quot;Model&quot;, OLLAMA_DEFAULT_MODEL)
+    systemPrompt = GetRegSetting(&quot;Prompt&quot;, &quot;You are a helpful document assistant. Analyze the document content and respond professionally. Keep your response concise and well-structured.&quot;)
+    timeoutSecs = CLng(GetRegSetting(&quot;Timeout&quot;, CStr(REQUEST_TIMEOUT_SECS)))
+
+    Dim userContent As String
+    userContent = &quot;Document Type: &quot; &amp; docType &amp; vbCrLf &amp; vbCrLf &amp; &quot;Document Content:&quot; &amp; vbCrLf &amp; docText
+
+    Dim response As String
+    response = Ollama_ProcessRequest(systemPrompt, userContent, modelName, timeoutSecs)
+
+    If response &lt;&gt; &quot;&quot; Then
+        InsertResponseIntoDocument response, doc
+    Else
+        MsgBox &quot;No response received from Ollama.&quot; &amp; vbCrLf &amp; &quot;Check that your model is downloaded and try again.&quot;, vbExclamation, APP_NAME
+    End If
+
+    Exit Sub
+
+ProcessError:
+    MsgBox &quot;Error processing document: &quot; &amp; Err.Description, vbCritical, APP_NAME
+End Sub
+
+&apos;====================================================================
+&apos; Get text content from a Writer document
+&apos;====================================================================
+Private Function GetWriterDocumentText(ByVal doc As Object) As String
+    On Error Resume Next
+    Dim text As Object
+    Set text = doc.Text
+    If text Is Nothing Then
+        GetWriterDocumentText = &quot;&quot;
+        Exit Function
+    End If
+    GetWriterDocumentText = text.String
+End Function
+
+&apos;====================================================================
+&apos; Get text content from a Calc spreadsheet
+&apos;====================================================================
+Private Function GetCalcDocumentText(ByVal doc As Object) As String
+    On Error Resume Next
+    Dim result As String
+    result = &quot;&quot;
+    Dim sheets As Object
+    Set sheets = doc.Sheets
+    If sheets Is Nothing Then
+        GetCalcDocumentText = &quot;&quot;
+        Exit Function
+    End If
+    Dim sheetCount As Long
+    sheetCount = sheets.getCount()
+    Dim i As Long
+    For i = 0 To sheetCount - 1
+        Dim sheet As Object
+        Set sheet = sheets.getByIndex(i)
+        If Not sheet Is Nothing Then
+            If result &lt;&gt; &quot;&quot; Then result = result &amp; vbCrLf &amp; vbCrLf
+            result = result &amp; &quot;=== Sheet: &quot; &amp; sheet.Name &amp; &quot; ===&quot; &amp; vbCrLf
+            Dim cursor As Object
+            Set cursor = sheet.createCursor()
+            If Not cursor Is Nothing Then
+                cursor.gotoStartOfUsedArea(False)
+                cursor.gotoEndOfUsedArea(True)
+                Dim rangeAddr As Object
+                Set rangeAddr = cursor.getRangeAddress()
+                Dim maxRow As Long
+                maxRow = rangeAddr.EndRow
+                Dim maxCol As Long
+                maxCol = rangeAddr.EndColumn
+                Dim row As Long
+                Dim col As Long
+                For row = 0 To maxRow
+                    Dim rowText As String
+                    rowText = &quot;&quot;
+                    For col = 0 To maxCol
+                        On Error Resume Next
+                        Dim cellValue As String
+                        cellValue = sheet.getCellByPosition(col, row).String
+                        If Err.Number = 0 And cellValue &lt;&gt; &quot;&quot; Then
+                            If rowText &lt;&gt; &quot;&quot; Then rowText = rowText &amp; &quot; | &quot;
+                            rowText = rowText &amp; cellValue
+                        End If
+                        On Error GoTo 0
+                    Next col
+                    If rowText &lt;&gt; &quot;&quot; Then
+                        result = result &amp; rowText &amp; vbCrLf
+                    End If
+                Next row
+            End If
+        End If
+    Next i
+    GetCalcDocumentText = result
+End Function
+
+&apos;====================================================================
+&apos; Get text content from an Impress presentation
+&apos;====================================================================
+Private Function GetImpressDocumentText(ByVal doc As Object) As String
+    On Error Resume Next
+    Dim result As String
+    result = &quot;&quot;
+    Dim slides As Object
+    Set slides = doc.Slides
+    If slides Is Nothing Then
+        GetImpressDocumentText = &quot;&quot;
+        Exit Function
+    End If
+    Dim slideCount As Long
+    slideCount = slides.getCount()
+    Dim i As Long
+    For i = 0 To slideCount - 1
+        Dim slide As Object
+        Set slide = slides.getByIndex(i)
+        If Not slide Is Nothing Then
+            If result &lt;&gt; &quot;&quot; Then result = result &amp; vbCrLf
+            result = result &amp; &quot;=== Slide &quot; &amp; (i + 1) &amp; &quot; ===&quot; &amp; vbCrLf
+            Dim shapeIdx As Long
+            Dim shapeCount As Long
+            shapeCount = slide.getCount()
+            For shapeIdx = 0 To shapeCount - 1
+                On Error Resume Next
+                Dim shape As Object
+                Set shape = slide.getByIndex(shapeIdx)
+                If Err.Number = 0 And Not shape Is Nothing Then
+                    If shape.supportsService(&quot;com.sun.star.drawing.TextShape&quot;) Then
+                        Dim shapeText As String
+                        shapeText = shape.String
+                        If shapeText &lt;&gt; &quot;&quot; Then
+                            result = result &amp; shapeText &amp; vbCrLf
+                        End If
+                    End If
+                End If
+                On Error GoTo 0
+            Next shapeIdx
+        End If
+    Next i
+    GetImpressDocumentText = result
+End Function
+
+&apos;====================================================================
+&apos; Insert response text into the document
+&apos;====================================================================
+Private Sub InsertResponseIntoDocument(ByVal responseText As String, ByVal doc As Object)
+    On Error Resume Next
+
+    If doc Is Nothing Then Exit Sub
+
+    If doc.supportsService(&quot;com.sun.star.text.TextDocument&quot;) Then
+        Dim cursor As Object
+        Set cursor = doc.Text.createTextCursor()
+        If Not cursor Is Nothing Then
+            doc.Text.insertString(cursor, vbCrLf &amp; vbCrLf &amp; responseText, False)
+        End If
+    ElseIf doc.supportsService(&quot;com.sun.star.sheet.SpreadsheetDocument&quot;) Then
+        Dim sheets As Object
+        Set sheets = doc.Sheets
+        If sheets.getCount() &gt; 0 Then
+            Dim sheet As Object
+            Set sheet = sheets.getByIndex(0)
+            Dim targetCell As Object
+            On Error Resume Next
+            Set targetCell = doc.CurrentSelection
+            If targetCell Is Nothing Then
+                Set targetCell = sheet.getCellByPosition(0, 0)
+            End If
+            If Not targetCell Is Nothing Then
+                targetCell.String = responseText
+            End If
+            On Error GoTo 0
+        End If
+    ElseIf doc.supportsService(&quot;com.sun.star.presentation.PresentationDocument&quot;) Then
+        Dim curSel As Object
+        Set curSel = doc.CurrentSelection
+        If Not curSel Is Nothing Then
+            If curSel.supportsService(&quot;com.sun.star.drawing.TextShape&quot;) Then
+                curSel.String = curSel.String &amp; vbCrLf &amp; responseText
+            Else
+                MsgBox &quot;Select a text box on the slide first, then run the macro.&quot;, vbInformation, APP_NAME
+            End If
+        Else
+            MsgBox &quot;Select a text box on the slide first, then run the macro.&quot;, vbInformation, APP_NAME
+        End If
+    End If
+End Sub
+
+&apos;====================================================================
+&apos; Settings Form (PowerShell-based Windows Forms)
+&apos;====================================================================
+Public Sub Ollama_ShowConfigurationForm()
+    On Error GoTo ConfigFormError
+
+    Dim currentModel As String
+    Dim currentPrompt As String
+    Dim currentTimeout As String
+    Dim psScript As String
+
+    currentModel = GetRegSetting(&quot;Model&quot;, OLLAMA_DEFAULT_MODEL)
+    currentPrompt = GetRegSetting(&quot;Prompt&quot;, &quot;&quot;)
+    currentTimeout = GetRegSetting(&quot;Timeout&quot;, CStr(REQUEST_TIMEOUT_SECS))
+
+    Dim psCode As String
+    psCode = &quot;$models = @(); &quot;
+    psCode = psCode &amp; &quot;try { &quot;
+    psCode = psCode &amp; &quot;$resp = Invoke-RestMethod -Uri &apos;http://localhost:11434/api/tags&apos; -TimeoutSec 5 -ErrorAction Stop; &quot;
+    psCode = psCode &amp; &quot;$models = $resp.models | ForEach-Object { $_.name }; &quot;
+    psCode = psCode &amp; &quot;} catch { $models = @(&apos;&quot; &amp; EscapeForPS(currentModel) &amp; &quot;&apos;) }; &quot;
+    psCode = psCode &amp; &quot;if ($models.Count -eq 0) { $models = @(&apos;&quot; &amp; EscapeForPS(currentModel) &amp; &quot;&apos;) }; &quot;
+    psCode = psCode &amp; &quot;$dm = &apos;&quot; &amp; EscapeForPS(currentModel) &amp; &quot;&apos;; &quot;
+    psCode = psCode &amp; &quot;$dp = &apos;&quot; &amp; EscapeForPS(currentPrompt) &amp; &quot;&apos;; &quot;
+    psCode = psCode &amp; &quot;$dt = &quot; &amp; currentTimeout &amp; &quot;; &quot;
+    psCode = psCode &amp; &quot;Add-Type -AssemblyName System.Windows.Forms; &quot;
+    psCode = psCode &amp; &quot;Add-Type -AssemblyName System.Drawing; &quot;
+    psCode = psCode &amp; &quot;$form = New-Object System.Windows.Forms.Form; &quot;
+    psCode = psCode &amp; &quot;$form.Text = &apos;Ollama LibreOffice AI - Settings&apos;; &quot;
+    psCode = psCode &amp; &quot;$form.Size = New-Object System.Drawing.Size(520,420); &quot;
+    psCode = psCode &amp; &quot;$form.StartPosition = &apos;CenterScreen&apos;; &quot;
+    psCode = psCode &amp; &quot;$form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $pid).MainModule.FileName); &quot;
+    psCode = psCode &amp; &quot;$form.FormBorderStyle = &apos;FixedDialog&apos;; &quot;
+    psCode = psCode &amp; &quot;$form.MaximizeBox = $false; &quot;
+    psCode = psCode &amp; &quot;$lblModel = New-Object System.Windows.Forms.Label; &quot;
+    psCode = psCode &amp; &quot;$lblModel.Text = &apos;AI Model:&apos;; &quot;
+    psCode = psCode &amp; &quot;$lblModel.Location = New-Object System.Drawing.Point(15,20); &quot;
+    psCode = psCode &amp; &quot;$lblModel.Size = New-Object System.Drawing.Size(100,25); &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($lblModel); &quot;
+    psCode = psCode &amp; &quot;$cmbModel = New-Object System.Windows.Forms.ComboBox; &quot;
+    psCode = psCode &amp; &quot;$cmbModel.Location = New-Object System.Drawing.Point(120,18); &quot;
+    psCode = psCode &amp; &quot;$cmbModel.Size = New-Object System.Drawing.Size(370,25); &quot;
+    psCode = psCode &amp; &quot;$cmbModel.DropDownStyle = &apos;DropDownList&apos;; &quot;
+    psCode = psCode &amp; &quot;foreach ($m in $models) { [void]$cmbModel.Items.Add($m); if ($m -eq $dm) { $cmbModel.SelectedItem = $m } }; &quot;
+    psCode = psCode &amp; &quot;if ($cmbModel.SelectedIndex -eq -1 -and $cmbModel.Items.Count -gt 0) { $cmbModel.SelectedIndex = 0 }; &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($cmbModel); &quot;
+    psCode = psCode &amp; &quot;$lblPrompt = New-Object System.Windows.Forms.Label; &quot;
+    psCode = psCode &amp; &quot;$lblPrompt.Text = &apos;System Prompt:&apos;; &quot;
+    psCode = psCode &amp; &quot;$lblPrompt.Location = New-Object System.Drawing.Point(15,55); &quot;
+    psCode = psCode &amp; &quot;$lblPrompt.Size = New-Object System.Drawing.Size(100,25); &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($lblPrompt); &quot;
+    psCode = psCode &amp; &quot;$txtPrompt = New-Object System.Windows.Forms.TextBox; &quot;
+    psCode = psCode &amp; &quot;$txtPrompt.Location = New-Object System.Drawing.Point(15,80); &quot;
+    psCode = psCode &amp; &quot;$txtPrompt.Size = New-Object System.Drawing.Size(475,120); &quot;
+    psCode = psCode &amp; &quot;$txtPrompt.Multiline = $true; &quot;
+    psCode = psCode &amp; &quot;$txtPrompt.ScrollBars = &apos;Vertical&apos;; &quot;
+    psCode = psCode &amp; &quot;$txtPrompt.Text = $dp; &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($txtPrompt); &quot;
+    psCode = psCode &amp; &quot;$lblTimeout = New-Object System.Windows.Forms.Label; &quot;
+    psCode = psCode &amp; &quot;$lblTimeout.Text = &apos;Timeout (seconds):&apos;; &quot;
+    psCode = psCode &amp; &quot;$lblTimeout.Location = New-Object System.Drawing.Point(15,215); &quot;
+    psCode = psCode &amp; &quot;$lblTimeout.Size = New-Object System.Drawing.Size(120,25); &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($lblTimeout); &quot;
+    psCode = psCode &amp; &quot;$nudTimeout = New-Object System.Windows.Forms.NumericUpDown; &quot;
+    psCode = psCode &amp; &quot;$nudTimeout.Location = New-Object System.Drawing.Point(140,213); &quot;
+    psCode = psCode &amp; &quot;$nudTimeout.Size = New-Object System.Drawing.Size(80,25); &quot;
+    psCode = psCode &amp; &quot;$nudTimeout.Minimum = 10; &quot;
+    psCode = psCode &amp; &quot;$nudTimeout.Maximum = 600; &quot;
+    psCode = psCode &amp; &quot;$nudTimeout.Value = $dt; &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($nudTimeout); &quot;
+    psCode = psCode &amp; &quot;$lblInfo = New-Object System.Windows.Forms.Label; &quot;
+    psCode = psCode &amp; &quot;$lblInfo.Text = &apos;Settings are saved to Windows Registry (HKCU\Software\OllamaLibreOfficeAI).&apos;; &quot;
+    psCode = psCode &amp; &quot;$lblInfo.Location = New-Object System.Drawing.Point(15,255); &quot;
+    psCode = psCode &amp; &quot;$lblInfo.Size = New-Object System.Drawing.Size(475,25); &quot;
+    psCode = psCode &amp; &quot;$lblInfo.ForeColor = &apos;Gray&apos;; &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($lblInfo); &quot;
+    psCode = psCode &amp; &quot;$btnOK = New-Object System.Windows.Forms.Button; &quot;
+    psCode = psCode &amp; &quot;$btnOK.Text = &apos;Save&apos;; &quot;
+    psCode = psCode &amp; &quot;$btnOK.Location = New-Object System.Drawing.Point(160,300); &quot;
+    psCode = psCode &amp; &quot;$btnOK.Size = New-Object System.Drawing.Size(90,30); &quot;
+    psCode = psCode &amp; &quot;$btnOK.Add_Click({ $form.Tag = $cmbModel.SelectedItem + &apos;|&apos; + $txtPrompt.Text + &apos;|&apos; + $nudTimeout.Value; $form.DialogResult = &apos;OK&apos;; $form.Close() }); &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($btnOK); &quot;
+    psCode = psCode &amp; &quot;$btnCancel = New-Object System.Windows.Forms.Button; &quot;
+    psCode = psCode &amp; &quot;$btnCancel.Text = &apos;Cancel&apos;; &quot;
+    psCode = psCode &amp; &quot;$btnCancel.Location = New-Object System.Drawing.Point(270,300); &quot;
+    psCode = psCode &amp; &quot;$btnCancel.Size = New-Object System.Drawing.Size(90,30); &quot;
+    psCode = psCode &amp; &quot;$btnCancel.Add_Click({ $form.DialogResult = &apos;Cancel&apos;; $form.Close() }); &quot;
+    psCode = psCode &amp; &quot;$form.Controls.Add($btnCancel); &quot;
+    psCode = psCode &amp; &quot;$result = $form.ShowDialog(); &quot;
+    psCode = psCode &amp; &quot;if ($result -eq &apos;OK&apos;) { &quot;
+    psCode = psCode &amp; &quot;$parts = $form.Tag -split &apos;\|&apos;; &quot;
+    psCode = psCode &amp; &quot;Write-Output $parts[0]; &quot;
+    psCode = psCode &amp; &quot;Write-Output $parts[1]; &quot;
+    psCode = psCode &amp; &quot;Write-Output ([int]$parts[2]); &quot;
+    psCode = psCode &amp; &quot;} else { Write-Output &apos;CANCELLED&apos; }&quot;
+
+    Dim result As String
+    result = RunPowerShell(psCode)
+
+    If result &lt;&gt; &quot;CANCELLED&quot; And result &lt;&gt; &quot;&quot; Then
+        Dim lines() As String
+        lines = Split(result, vbCrLf)
+
+        If UBound(lines) &gt;= 0 Then
+            Dim modelVal As String
+            modelVal = Trim(lines(0))
+            If modelVal &lt;&gt; &quot;&quot; Then SaveRegSetting &quot;Model&quot;, modelVal
+        End If
+
+        If UBound(lines) &gt;= 1 Then
+            Dim promptVal As String
+            promptVal = Trim(lines(1))
+            If promptVal &lt;&gt; &quot;&quot; Then SaveRegSetting &quot;Prompt&quot;, promptVal
+        End If
+
+        If UBound(lines) &gt;= 2 Then
+            Dim timeoutVal As String
+            timeoutVal = Trim(lines(2))
+            If timeoutVal &lt;&gt; &quot;&quot; Then SaveRegSetting &quot;Timeout&quot;, timeoutVal
+        End If
+
+        MsgBox &quot;Settings saved successfully.&quot;, vbInformation, APP_NAME
+    End If
+
+    Exit Sub
+
+ConfigFormError:
+    MsgBox &quot;Could not open configuration form: &quot; &amp; Err.Description, vbExclamation, APP_NAME
+End Sub
+
+&apos;====================================================================
+&apos; About Form
+&apos;====================================================================
+Public Sub Ollama_ShowAboutForm()
+    Dim msg As String
+    msg = APP_NAME &amp; &quot; v&quot; &amp; APP_VERSION &amp; vbCrLf &amp; vbCrLf
+    msg = msg &amp; &quot;Local AI Document Assistant for LibreOffice&quot; &amp; vbCrLf
+    msg = msg &amp; &quot;Powered by Ollama&quot; &amp; vbCrLf &amp; vbCrLf
+    msg = msg &amp; &quot;All processing is fully local.&quot; &amp; vbCrLf
+    msg = msg &amp; &quot;No data leaves your machine.&quot;
+    MsgBox msg, vbInformation, &quot;About &quot; &amp; APP_NAME
+End Sub
+
+&apos;====================================================================
+&apos; API Communication - Send request to Ollama
+&apos;====================================================================
+Private Function Ollama_ProcessRequest(ByVal systemPrompt As String, ByVal userContent As String, ByVal modelName As String, ByVal timeoutSecs As Long) As String
+    On Error GoTo RequestError
+
+    Dim payload As String
+    payload = &quot;{&quot;
+    payload = payload &amp; &quot;&quot;&quot;model&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(modelName) &amp; &quot;&quot;&quot;,&quot;
+    payload = payload &amp; &quot;&quot;&quot;messages&quot;&quot;:[&quot;
+    payload = payload &amp; &quot;{&quot;&quot;role&quot;&quot;:&quot;&quot;system&quot;&quot;,&quot;&quot;content&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(systemPrompt) &amp; &quot;&quot;&quot;},&quot;
+    payload = payload &amp; &quot;{&quot;&quot;role&quot;&quot;:&quot;&quot;user&quot;&quot;,&quot;&quot;content&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(userContent) &amp; &quot;&quot;&quot;}&quot;
+    payload = payload &amp; &quot;],&quot;
+    payload = payload &amp; &quot;&quot;&quot;stream&quot;&quot;:false&quot;
+    payload = payload &amp; &quot;}&quot;
+
+    Dim url As String
+    url = OLLAMA_BASE_URL &amp; &quot;/v1/chat/completions&quot;
+
+    Dim response As String
+    response = Ollama_SendHttpRequest(url, &quot;POST&quot;, payload, timeoutSecs)
+
+    If response = &quot;&quot; Then
+        Ollama_ProcessRequest = &quot;&quot;
+        Exit Function
+    End If
+
+    Dim content As String
+    content = ExtractResponseContent(response)
+    Ollama_ProcessRequest = content
+    Exit Function
+
+RequestError:
+    Ollama_ProcessRequest = &quot;&quot;
+End Function
+
+&apos;====================================================================
+&apos; HTTP Request using WinHttp
+&apos;====================================================================
+Private Function Ollama_SendHttpRequest(ByVal url As String, ByVal method As String, ByVal payload As String, ByVal timeoutSecs As Long) As String
+    On Error GoTo HttpError
+
+    Dim http As Object
+    Set http = CreateObject(&quot;WinHttp.WinHttpRequest.5.1&quot;)
+
+    Dim timeoutMs As Long
+    timeoutMs = timeoutSecs * 1000
+
+    http.Open method, url, False
+    http.SetTimeouts 10000, 15000, timeoutMs, timeoutMs
+    http.SetOption 0, &quot;Ollama-LibreOffice-AI/1.0&quot;
+    http.SetRequestHeader &quot;Content-Type&quot;, &quot;application/json&quot;
+
+    If method = &quot;POST&quot; Then
+        http.Send payload
+    Else
+        http.Send
+    End If
+
+    If http.Status = 200 Then
+        Ollama_SendHttpRequest = http.ResponseText
+    Else
+        Ollama_SendHttpRequest = &quot;&quot;
+    End If
+
+    Exit Function
+
+HttpError:
+    Ollama_SendHttpRequest = &quot;&quot;
+End Function
+
+&apos;====================================================================
+&apos; Extract response content from Ollama API JSON
+&apos;====================================================================
+Private Function ExtractResponseContent(ByVal json As String) As String
+    On Error Resume Next
+
+    Dim contentMarker As String
+    contentMarker = &quot;&quot;&quot;content&quot;&quot;:&quot;&quot;&quot;
+
+    Dim msgStart As Long
+    msgStart = InStr(json, &quot;&quot;&quot;message&quot;&quot;:{&quot;)
+    If msgStart = 0 Then
+        msgStart = InStr(json, contentMarker)
+        If msgStart = 0 Then
+            ExtractResponseContent = &quot;&quot;
+            Exit Function
+        End If
+    Else
+        msgStart = InStr(msgStart, json, contentMarker)
+        If msgStart = 0 Then
+            ExtractResponseContent = &quot;&quot;
+            Exit Function
+        End If
+    End If
+
+    Dim contentStart As Long
+    contentStart = msgStart + Len(contentMarker)
+
+    Dim contentEnd As Long
+    contentEnd = contentStart
+
+    Do While contentEnd &lt;= Len(json)
+        Dim ch As String
+        ch = Mid(json, contentEnd, 1)
+        If ch = &quot;\&quot; Then
+            contentEnd = contentEnd + 2
+        ElseIf ch = &quot;&quot;&quot;&quot; Then
+            Exit Do
+        Else
+            contentEnd = contentEnd + 1
+        End If
+    Loop
+
+    If contentEnd &gt; contentStart Then
+        ExtractResponseContent = Mid(json, contentStart, contentEnd - contentStart)
+        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\n&quot;, vbCrLf)
+        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\t&quot;, vbTab)
+        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\r&quot;, vbCr)
+        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\&quot;&quot;&quot;, &quot;&quot;&quot;&quot;)
+        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\&quot;, &quot;\&quot;)
+    Else
+        ExtractResponseContent = &quot;&quot;
+    End If
+End Function
+
+&apos;====================================================================
+&apos; Escape strings for JSON
+&apos;====================================================================
+Private Function EscapeJson(ByVal text As String) As String
+    Dim result As String
+    result = text
+    result = Replace(result, &quot;\&quot;, &quot;\\&quot;)
+    result = Replace(result, &quot;&quot;&quot;&quot;, &quot;\&quot;&quot;&quot;)
+    result = Replace(result, vbCrLf, &quot;\\n&quot;)
+    result = Replace(result, vbCr, &quot;\\r&quot;)
+    result = Replace(result, vbLf, &quot;\\n&quot;)
+    result = Replace(result, vbTab, &quot;\\t&quot;)
+    EscapeJson = result
+End Function
+
+&apos;====================================================================
+&apos; Escape strings for PowerShell single-quoted strings
+&apos;====================================================================
+Private Function EscapeForPS(ByVal text As String) As String
+    Dim result As String
+    result = Replace(text, &quot;&apos;&quot;, &quot;&apos;&apos;&quot;)
+    EscapeForPS = result
+End Function
+
+&apos;====================================================================
+&apos; Registry Helpers (via WScript.Shell)
+&apos;====================================================================
+Private Function GetRegSetting(ByVal key As String, ByVal defaultValue As String) As String
+    On Error Resume Next
+    Dim ws As Object
+    Set ws = CreateObject(&quot;WScript.Shell&quot;)
+    Dim regPath As String
+    regPath = REG_PATH_ROOT &amp; &quot;\&quot; &amp; key
+    Dim value As Variant
+    value = ws.RegRead(regPath)
+    If Err.Number = 0 Then
+        GetRegSetting = CStr(value)
+    Else
+        GetRegSetting = defaultValue
+    End If
+End Function
+
+Private Sub SaveRegSetting(ByVal key As String, ByVal value As String)
+    On Error Resume Next
+    Dim ws As Object
+    Set ws = CreateObject(&quot;WScript.Shell&quot;)
+    Dim regPath As String
+    regPath = REG_PATH_ROOT &amp; &quot;\&quot; &amp; key
+    ws.RegWrite REG_PATH_ROOT, &quot;&quot;, &quot;REG_SZ&quot;
+    ws.RegWrite regPath, value, &quot;REG_SZ&quot;
+End Sub
+
+&apos;====================================================================
+&apos; Run PowerShell script and capture output
+&apos;====================================================================
+Private Function RunPowerShell(ByVal script As String) As String
+    On Error GoTo PSError
+
+    Dim tempFile As String
+    Dim tempDir As String
+    tempDir = Environ(&quot;TEMP&quot;)
+    tempFile = tempDir &amp; &quot;\ollama_config.ps1&quot;
+
+    Dim fso As Object
+    Set fso = CreateObject(&quot;Scripting.FileSystemObject&quot;)
+    Dim f As Object
+    Set f = fso.CreateTextFile(tempFile, True)
+    f.Write script
+    f.Close
+
+    Dim ws As Object
+    Set ws = CreateObject(&quot;WScript.Shell&quot;)
+    Dim exec As Object
+    Dim cmd As String
+
+    cmd = &quot;powershell.exe -ExecutionPolicy Bypass -File &quot;&quot;&quot; &amp; tempFile &amp; &quot;&quot;&quot;&quot;
+    Set exec = ws.Exec(cmd)
+
+    Dim startTime As Double
+    startTime = Timer
+    Do While exec.Status = 0
+        If Timer &gt; startTime + 60 Then
+            exec.Terminate
+            Exit Do
+        End If
+    Loop
+
+    Dim output As String
+    If exec.Status &lt;&gt; 0 Then
+        output = exec.StdOut.ReadAll()
+    End If
+
+    On Error Resume Next
+    fso.DeleteFile tempFile
+    On Error GoTo 0
+
+    RunPowerShell = output
+    Exit Function
+
+PSError:
+    RunPowerShell = &quot;&quot;
+End Function
+
+&apos;====================================================================
+&apos; End of Module
+&apos;====================================================================
+</script:module>

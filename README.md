@@ -83,6 +83,8 @@ All settings are saved in Windows Registry under `HKCU\Software\OllamaLibreOffic
 3. Ollama processes the request using your selected model
 4. The AI-generated response is inserted into your document
 
+For screenshot analysis (`Ollama_AnalyzeScreenshot`), a PowerShell file dialog picks the image, converts it to base64, and sends it as a `data:` URI to Ollama's vision API.
+
 All communication is via HTTP to `localhost` — no data travels over the network.
 
 ## Available Macros
@@ -95,6 +97,7 @@ All communication is via HTTP to `localhost` — no data travels over the networ
 | `Ollama_ShowAboutForm` | Show version and info |
 | `Ollama_IsOllamaRunning` | Check if Ollama server is reachable (returns Boolean) |
 | `Ollama_RefreshModelsList` | Refresh the cached list of available models |
+| `Ollama_AnalyzeScreenshot` | Pick an error screenshot/image file, send to a vision model, and insert analysis |
 
 ## Troubleshooting
 
@@ -104,6 +107,7 @@ All communication is via HTTP to `localhost` — no data travels over the networ
 | No models in dropdown | Run `ollama pull llama3.2:3b` in terminal, then open Settings again. |
 | Request times out | Increase timeout in Settings (120s+). Smaller models respond faster. |
 | "Unsupported document type" | Only Writer (.odt, .docx), Calc (.ods, .xlsx), and Impress (.odp, .pptx) are supported. |
+| Screenshot analysis returns empty/error | The selected model may not support vision. Switch to a multimodal model like `llama3.2-vision` or `llava` in Settings. |
 | Settings window not showing | PowerShell must be available on your system (built into Windows). |
 | VBA-style `_` line continuations | LibreOffice Basic does not support them — this module uses single-line format. |
 

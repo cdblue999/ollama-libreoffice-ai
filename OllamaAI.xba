@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
 <script:module xmlns:script="http://openoffice.org/2000/script" script:name="OllamaAI" script:language="StarBasic">Attribute VB_Name = &quot;OllamaAI&quot;
 REM  ****  BASIC  ****
@@ -26,9 +26,9 @@ Option Explicit
 &apos; Constants
 &apos;====================================================================
 Private Const APP_NAME As String = &quot;OllamaLibreOfficeAI&quot;
-Private Const APP_VERSION As String = &quot;1.0.0&quot;
+Private Const APP_VERSION As String = &quot;1.0.1&quot;
 Private Const OLLAMA_BASE_URL As String = &quot;http://localhost:11434&quot;
-Private Const OLLAMA_DEFAULT_MODEL As String = &quot;llama3.2:3b&quot;
+Private Const OLLAMA_DEFAULT_MODEL As String = &quot;qwen2.5-coder:7b&quot;
 Private Const REQUEST_TIMEOUT_SECS As Long = 120
 Private Const REG_PATH_ROOT As String = &quot;HKEY_CURRENT_USER\Software\OllamaLibreOfficeAI&quot;
 
@@ -120,13 +120,15 @@ Private Function ExtractModelNames(ByVal json As String) As String
 
     Do
         nameStart = InStr(searchPos, json, &quot;&quot;&quot;name&quot;&quot;:&quot;&quot;&quot;)
-        If nameStart = 0 Or nameStart &gt; modelsStart + 5000 Then Exit Do
+        If nameStart = 0 Or nameStart &gt; modelsStart + 10000 Then Exit Do
         nameStart = nameStart + 8
         nameEnd = InStr(nameStart, json, &quot;&quot;&quot;&quot;)
-        If nameEnd = 0 Then Exit Do
+        If nameEnd = 0 Or nameEnd &lt;= nameStart Then Exit Do
         modelName = Mid(json, nameStart, nameEnd - nameStart)
-        If result &lt;&gt; &quot;&quot; Then result = result &amp; &quot;,&quot;
-        result = result &amp; modelName
+        If modelName &lt;&gt; &quot;&quot; Then
+            If result &lt;&gt; &quot;&quot; Then result = result &amp; &quot;,&quot;
+            result = result &amp; modelName
+        End If
         searchPos = nameEnd + 1
     Loop
 
@@ -194,9 +196,13 @@ Public Sub Ollama_ProcessDocument()
     response = Ollama_ProcessRequest(systemPrompt, userContent, modelName, timeoutSecs)
 
     If response &lt;&gt; &quot;&quot; Then
-        InsertResponseIntoDocument response, doc
+        If Left(response, 1) = &quot;[&quot; And InStr(response, &quot;Ollama Error:&quot;) &gt; 0 Then
+            MsgBox response, vbExclamation, APP_NAME
+        Else
+            InsertResponseIntoDocument response, doc
+        End If
     Else
-        MsgBox &quot;No response received from Ollama.&quot; &amp; vbCrLf &amp; &quot;Check that your model is downloaded and try again.&quot;, vbExclamation, APP_NAME
+        MsgBox &quot;No response received from Ollama.&quot; &amp; vbCrLf &amp; vbCrLf &amp; &quot;Check that:&quot; &amp; vbCrLf &amp; &quot;  - Ollama is running (ollama list)&quot; &amp; vbCrLf &amp; &quot;  - The selected model is downloaded&quot; &amp; vbCrLf &amp; &quot;  - Your model name matches exactly&quot;, vbExclamation, APP_NAME
     End If
 
     Exit Sub
@@ -540,7 +546,17 @@ Private Function Ollama_ProcessRequest(ByVal systemPrompt As String, ByVal userC
 
     Dim content As String
     content = ExtractResponseContent(response)
-    Ollama_ProcessRequest = content
+    If content = &quot;&quot; Then
+        Dim errMsg As String
+        errMsg = ExtractApiError(response)
+        If errMsg &lt;&gt; &quot;&quot; Then
+            Ollama_ProcessRequest = &quot;[Ollama Error: &quot; &amp; errMsg &amp; &quot;]&quot;
+        Else
+            Ollama_ProcessRequest = &quot;&quot;
+        End If
+    Else
+        Ollama_ProcessRequest = content
+    End If
     Exit Function
 
 RequestError:
@@ -570,10 +586,12 @@ Private Function Ollama_SendHttpRequest(ByVal url As String, ByVal method As Str
         http.Send
     End If
 
-    If http.Status = 200 Then
+    Dim status As Integer
+    status = http.Status
+    If status &gt;= 200 And status &lt; 300 Then
         Ollama_SendHttpRequest = http.ResponseText
     Else
-        Ollama_SendHttpRequest = &quot;&quot;
+        Ollama_SendHttpRequest = http.ResponseText
     End If
 
     Exit Function
@@ -626,15 +644,44 @@ Private Function ExtractResponseContent(ByVal json As String) As String
     Loop
 
     If contentEnd &gt; contentStart Then
-        ExtractResponseContent = Mid(json, contentStart, contentEnd - contentStart)
-        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\n&quot;, vbCrLf)
-        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\t&quot;, vbTab)
-        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\r&quot;, vbCr)
-        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\&quot;&quot;&quot;, &quot;&quot;&quot;&quot;)
-        ExtractResponseContent = Replace(ExtractResponseContent, &quot;\\&quot;, &quot;\&quot;)
+        Dim raw As String
+        raw = Mid(json, contentStart, contentEnd - contentStart)
+        Dim result As String
+        result = raw
+        result = Replace(result, &quot;\\&quot;, Chr(1))
+        result = Replace(result, &quot;\n&quot;, vbCrLf)
+        result = Replace(result, &quot;\t&quot;, vbTab)
+        result = Replace(result, &quot;\r&quot;, vbCr)
+        result = Replace(result, &quot;\&quot;&quot;&quot;, &quot;&quot;&quot;&quot;)
+        result = Replace(result, Chr(1), &quot;\&quot;)
+        ExtractResponseContent = result
     Else
         ExtractResponseContent = &quot;&quot;
     End If
+End Function
+
+&apos;====================================================================
+&apos; Extract error message from Ollama API error response
+&apos;====================================================================
+Private Function ExtractApiError(ByVal json As String) As String
+    On Error Resume Next
+    Dim errStart As Long
+    errStart = InStr(json, &quot;&quot;&quot;error&quot;&quot;:&quot;&quot;&quot;)
+    If errStart = 0 Then
+        errStart = InStr(json, &quot;&quot;&quot;message&quot;&quot;:&quot;&quot;&quot;)
+    End If
+    If errStart = 0 Then
+        ExtractApiError = &quot;&quot;
+        Exit Function
+    End If
+    errStart = errStart + 10
+    Dim errEnd As Long
+    errEnd = InStr(errStart, json, &quot;&quot;&quot;&quot;)
+    If errEnd = 0 Or errEnd &lt;= errStart Then
+        ExtractApiError = &quot;&quot;
+        Exit Function
+    End If
+    ExtractApiError = Mid(json, errStart, errEnd - errStart)
 End Function
 
 &apos;====================================================================
@@ -685,7 +732,6 @@ Private Sub SaveRegSetting(ByVal key As String, ByVal value As String)
     Set ws = CreateObject(&quot;WScript.Shell&quot;)
     Dim regPath As String
     regPath = REG_PATH_ROOT &amp; &quot;\&quot; &amp; key
-    ws.RegWrite REG_PATH_ROOT, &quot;&quot;, &quot;REG_SZ&quot;
     ws.RegWrite regPath, value, &quot;REG_SZ&quot;
 End Sub
 
@@ -738,6 +784,136 @@ Private Function RunPowerShell(ByVal script As String) As String
 
 PSError:
     RunPowerShell = &quot;&quot;
+End Function
+
+&apos;====================================================================
+&apos; Screenshot Analysis - Pick an image and analyze it with a vision model
+&apos;====================================================================
+Public Sub Ollama_AnalyzeScreenshot()
+    On Error GoTo ScreenshotError
+
+    If Not Ollama_IsOllamaRunning() Then
+        MsgBox &quot;Ollama is not running.&quot; &amp; vbCrLf &amp; vbCrLf &amp; &quot;Please start Ollama and try again.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    Dim doc As Object
+    doc = ThisComponent
+    If doc Is Nothing Then
+        MsgBox &quot;No document is open.&quot;, vbExclamation, APP_NAME
+        Exit Sub
+    End If
+
+    Dim imageDataUri As String
+    imageDataUri = PickImageAndGetBase64()
+
+    If imageDataUri = &quot;CANCELLED&quot; Or imageDataUri = &quot;&quot; Then
+        Exit Sub
+    End If
+
+    Dim modelName As String
+    Dim systemPrompt As String
+    Dim timeoutSecs As Long
+
+    modelName = GetRegSetting(&quot;Model&quot;, OLLAMA_DEFAULT_MODEL)
+    systemPrompt = GetRegSetting(&quot;Prompt&quot;, &quot;You are a helpful document assistant. Analyze the document content and respond professionally. Keep your response concise and well-structured.&quot;)
+    timeoutSecs = CLng(GetRegSetting(&quot;Timeout&quot;, CStr(REQUEST_TIMEOUT_SECS)))
+
+    Dim prompt As String
+    prompt = &quot;Analyze this error screenshot or image. Explain what the error means, what caused it, and how to fix it.&quot;
+
+    Dim response As String
+    response = Ollama_ProcessVisionRequest(systemPrompt, prompt, imageDataUri, modelName, timeoutSecs)
+
+    If response &lt;&gt; &quot;&quot; Then
+        If Left(response, 1) = &quot;[&quot; And InStr(response, &quot;Ollama Error:&quot;) &gt; 0 Then
+            MsgBox response, vbExclamation, APP_NAME
+        Else
+            InsertResponseIntoDocument response, doc
+        End If
+    Else
+        MsgBox &quot;No response received from Ollama.&quot; &amp; vbCrLf &amp; vbCrLf &amp; &quot;Check that:&quot; &amp; vbCrLf &amp; &quot;  - Ollama is running&quot; &amp; vbCrLf &amp; &quot;  - The selected model supports vision (e.g., llama3.2-vision, llava)&quot;, vbExclamation, APP_NAME
+    End If
+
+    Exit Sub
+
+ScreenshotError:
+    MsgBox &quot;Error analyzing screenshot: &quot; &amp; Err.Description, vbCritical, APP_NAME
+End Sub
+
+&apos;====================================================================
+&apos; File picker + base64 via PowerShell
+&apos;====================================================================
+Private Function PickImageAndGetBase64() As String
+    On Error GoTo PickError
+
+    Dim psCode As String
+    psCode = &quot;Add-Type -AssemblyName System.Windows.Forms; &quot;
+    psCode = psCode &amp; &quot;$ofd = New-Object System.Windows.Forms.OpenFileDialog; &quot;
+    psCode = psCode &amp; &quot;$ofd.Title = &apos;Select Screenshot or Error Image&apos;; &quot;
+    psCode = psCode &amp; &quot;$ofd.Filter = &apos;Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif&apos;; &quot;
+    psCode = psCode &amp; &quot;if ($ofd.ShowDialog() -eq &apos;OK&apos;) { &quot;
+    psCode = psCode &amp; &quot;$bytes = [System.IO.File]::ReadAllBytes($ofd.FileName); &quot;
+    psCode = psCode &amp; &quot;$b64 = [System.Convert]::ToBase64String($bytes); &quot;
+    psCode = psCode &amp; &quot;$ext = [System.IO.Path]::GetExtension($ofd.FileName).TrimStart(&apos;.&apos;).ToLower(); &quot;
+    psCode = psCode &amp; &quot;if ($ext -eq &apos;jpg&apos;) { $ext = &apos;jpeg&apos; }; &quot;
+    psCode = psCode &amp; &quot;Write-Output (&apos;data:image/&apos; + $ext + &apos;;base64,&apos; + $b64) &quot;
+    psCode = psCode &amp; &quot;} else { Write-Output &apos;CANCELLED&apos; }&quot;
+
+    PickImageAndGetBase64 = RunPowerShell(psCode)
+    Exit Function
+
+PickError:
+    PickImageAndGetBase64 = &quot;&quot;
+End Function
+
+&apos;====================================================================
+&apos; Vision API Request - Send image with text to vision model
+&apos;====================================================================
+Private Function Ollama_ProcessVisionRequest(ByVal systemPrompt As String, ByVal userPrompt As String, ByVal imageDataUri As String, ByVal modelName As String, ByVal timeoutSecs As Long) As String
+    On Error GoTo VisionError
+
+    Dim payload As String
+    payload = &quot;{&quot;
+    payload = payload &amp; &quot;&quot;&quot;model&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(modelName) &amp; &quot;&quot;&quot;,&quot;
+    payload = payload &amp; &quot;&quot;&quot;messages&quot;&quot;:[&quot;
+    payload = payload &amp; &quot;{&quot;&quot;role&quot;&quot;:&quot;&quot;system&quot;&quot;,&quot;&quot;content&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(systemPrompt) &amp; &quot;&quot;&quot;},&quot;
+    payload = payload &amp; &quot;{&quot;&quot;role&quot;&quot;:&quot;&quot;user&quot;&quot;,&quot;&quot;content&quot;&quot;:[&quot;
+    payload = payload &amp; &quot;{&quot;&quot;type&quot;&quot;:&quot;&quot;text&quot;&quot;,&quot;&quot;text&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(userPrompt) &amp; &quot;&quot;&quot;},&quot;
+    payload = payload &amp; &quot;{&quot;&quot;type&quot;&quot;:&quot;&quot;image_url&quot;&quot;,&quot;&quot;image_url&quot;&quot;:{&quot;&quot;url&quot;&quot;:&quot;&quot;&quot; &amp; EscapeJson(imageDataUri) &amp; &quot;&quot;&quot;}}&quot;
+    payload = payload &amp; &quot;]}&quot;
+    payload = payload &amp; &quot;],&quot;
+    payload = payload &amp; &quot;&quot;&quot;stream&quot;&quot;:false&quot;
+    payload = payload &amp; &quot;}&quot;
+
+    Dim url As String
+    url = OLLAMA_BASE_URL &amp; &quot;/v1/chat/completions&quot;
+
+    Dim response As String
+    response = Ollama_SendHttpRequest(url, &quot;POST&quot;, payload, timeoutSecs)
+
+    If response = &quot;&quot; Then
+        Ollama_ProcessVisionRequest = &quot;&quot;
+        Exit Function
+    End If
+
+    Dim content As String
+    content = ExtractResponseContent(response)
+    If content = &quot;&quot; Then
+        Dim errMsg As String
+        errMsg = ExtractApiError(response)
+        If errMsg &lt;&gt; &quot;&quot; Then
+            Ollama_ProcessVisionRequest = &quot;[Ollama Error: &quot; &amp; errMsg &amp; &quot;]&quot;
+        Else
+            Ollama_ProcessVisionRequest = &quot;&quot;
+        End If
+    Else
+        Ollama_ProcessVisionRequest = content
+    End If
+    Exit Function
+
+VisionError:
+    Ollama_ProcessVisionRequest = &quot;&quot;
 End Function
 
 &apos;====================================================================

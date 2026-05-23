@@ -771,8 +771,8 @@ Private Function RunPowerShell(ByVal script As String) As String
     Dim f As Object
     Dim ws As Object
     Dim exec As Object
-    Dim cmd As String
-    Dim output As String
+    Dim shellCmd As String
+    Dim shellOut As String
     Dim startTime As Double
 
     tempDir = Environ("TEMP")
@@ -785,8 +785,8 @@ Private Function RunPowerShell(ByVal script As String) As String
 
     Set ws = CreateObject("WScript.Shell")
 
-    cmd = "powershell.exe -ExecutionPolicy Bypass -File """ & tempFile & """"
-    Set exec = ws.Exec(cmd)
+    shellCmd = "powershell.exe -ExecutionPolicy Bypass -File """ & tempFile & """"
+    Set exec = ws.Exec(shellCmd)
 
     startTime = Timer
     Do While exec.Status = 0
@@ -797,14 +797,14 @@ Private Function RunPowerShell(ByVal script As String) As String
     Loop
 
     If exec.Status <> 0 Then
-        output = exec.StdOut.ReadAll()
+        shellOut = exec.StdOut.ReadAll()
     End If
 
     On Error Resume Next
     fso.DeleteFile tempFile
     On Error GoTo 0
 
-    RunPowerShell = output
+    RunPowerShell = shellOut
     Exit Function
 
 PSError:

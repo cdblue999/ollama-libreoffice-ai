@@ -29,6 +29,7 @@ Private Const OLLAMA_BASE_URL As String = "http://localhost:11434"
 Private Const OLLAMA_DEFAULT_MODEL As String = "qwen2.5-coder:7b"
 Private Const REQUEST_TIMEOUT_SECS As Long = 120
 Private Const REG_PATH_ROOT As String = "HKEY_CURRENT_USER\Software\OllamaLibreOfficeAI"
+Private Const CRLF As String = Chr(13) + Chr(10)
 
 '====================================================================
 ' Initialization - Run once after import to create default settings
@@ -45,7 +46,7 @@ Public Sub Ollama_Initialize()
         SaveRegSetting "ApiKey", ""
     End If
 
-    MsgBox APP_NAME & " v" & APP_VERSION & " initialized." & vbCrLf & vbCrLf & "Run Tools > Macros > Ollama_ProcessDocument to use.", vbInformation, APP_NAME
+    MsgBox APP_NAME & " v" & APP_VERSION & " initialized." & CRLF & CRLF & "Run Tools > Macros > Ollama_ProcessDocument to use.", vbInformation, APP_NAME
 End Sub
 
 '====================================================================
@@ -142,7 +143,7 @@ Public Sub Ollama_ProcessDocument()
     On Error GoTo ProcessError
 
     If Not Ollama_IsOllamaRunning() Then
-        MsgBox "Ollama is not running." & vbCrLf & vbCrLf & "Please start Ollama and try again.", vbExclamation, APP_NAME
+        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", vbExclamation, APP_NAME
         Exit Sub
     End If
 
@@ -189,7 +190,7 @@ Public Sub Ollama_ProcessDocument()
     timeoutSecs = CLng(GetRegSetting("Timeout", CStr(REQUEST_TIMEOUT_SECS)))
 
     Dim userContent As String
-    userContent = "Document Type: " & docType & vbCrLf & vbCrLf & "Document Content:" & vbCrLf & docText
+    userContent = "Document Type: " & docType & CRLF & CRLF & "Document Content:" & CRLF & docText
 
     Dim response As String
     response = Ollama_ProcessRequest(systemPrompt, userContent, modelName, timeoutSecs)
@@ -201,7 +202,7 @@ Public Sub Ollama_ProcessDocument()
             InsertResponseIntoDocument response, doc
         End If
     Else
-        MsgBox "No response received from Ollama." & vbCrLf & vbCrLf & "Check that:" & vbCrLf & "  - Ollama is running (ollama list)" & vbCrLf & "  - The selected model is downloaded" & vbCrLf & "  - Your model name matches exactly", vbExclamation, APP_NAME
+        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running (ollama list)" & CRLF & "  - The selected model is downloaded" & CRLF & "  - Your model name matches exactly", vbExclamation, APP_NAME
     End If
 
     Exit Sub
@@ -244,8 +245,8 @@ Private Function GetCalcDocumentText(ByVal doc As Object) As String
         Dim sheet As Object
         Set sheet = sheets.getByIndex(i)
         If Not sheet Is Nothing Then
-            If result <> "" Then result = result & vbCrLf & vbCrLf
-            result = result & "=== Sheet: " & sheet.Name & " ===" & vbCrLf
+            If result <> "" Then result = result & CRLF & CRLF
+            result = result & "=== Sheet: " & sheet.Name & " ===" & CRLF
             Dim cursor As Object
             Set cursor = sheet.createCursor()
             If Not cursor Is Nothing Then
@@ -273,7 +274,7 @@ Private Function GetCalcDocumentText(ByVal doc As Object) As String
                         On Error GoTo 0
                     Next col
                     If rowText <> "" Then
-                        result = result & rowText & vbCrLf
+                        result = result & rowText & CRLF
                     End If
                 Next row
             End If
@@ -302,8 +303,8 @@ Private Function GetImpressDocumentText(ByVal doc As Object) As String
         Dim slide As Object
         Set slide = slides.getByIndex(i)
         If Not slide Is Nothing Then
-            If result <> "" Then result = result & vbCrLf
-            result = result & "=== Slide " & (i + 1) & " ===" & vbCrLf
+            If result <> "" Then result = result & CRLF
+            result = result & "=== Slide " & (i + 1) & " ===" & CRLF
             Dim shapeIdx As Long
             Dim shapeCount As Long
             shapeCount = slide.getCount()
@@ -316,7 +317,7 @@ Private Function GetImpressDocumentText(ByVal doc As Object) As String
                         Dim shapeText As String
                         shapeText = shape.String
                         If shapeText <> "" Then
-                            result = result & shapeText & vbCrLf
+                            result = result & shapeText & CRLF
                         End If
                     End If
                 End If
@@ -339,7 +340,7 @@ Private Sub InsertResponseIntoDocument(ByVal responseText As String, ByVal doc A
         Dim cursor As Object
         Set cursor = doc.Text.createTextCursor()
         If Not cursor Is Nothing Then
-            doc.Text.insertString(cursor, vbCrLf & vbCrLf & responseText, False)
+            doc.Text.insertString(cursor, CRLF & CRLF & responseText, False)
         End If
     ElseIf doc.supportsService("com.sun.star.sheet.SpreadsheetDocument") Then
         Dim sheets As Object
@@ -363,7 +364,7 @@ Private Sub InsertResponseIntoDocument(ByVal responseText As String, ByVal doc A
         Set curSel = doc.CurrentSelection
         If Not curSel Is Nothing Then
             If curSel.supportsService("com.sun.star.drawing.TextShape") Then
-                curSel.String = curSel.String & vbCrLf & responseText
+                curSel.String = curSel.String & CRLF & responseText
             Else
                 MsgBox "Select a text box on the slide first, then run the macro.", vbInformation, APP_NAME
             End If
@@ -487,7 +488,7 @@ Public Sub Ollama_ShowConfigurationForm()
 
     If result <> "CANCELLED" And result <> "" Then
         Dim lines() As String
-        lines = Split(result, vbCrLf)
+        lines = Split(result, CRLF)
 
         If UBound(lines) >= 0 Then
             Dim modelVal As String
@@ -527,10 +528,10 @@ End Sub
 '====================================================================
 Public Sub Ollama_ShowAboutForm()
     Dim msg As String
-    msg = APP_NAME & " v" & APP_VERSION & vbCrLf & vbCrLf
-    msg = msg & "Local AI Document Assistant for LibreOffice" & vbCrLf
-    msg = msg & "Powered by Ollama" & vbCrLf & vbCrLf
-    msg = msg & "All processing is fully local." & vbCrLf
+    msg = APP_NAME & " v" & APP_VERSION & CRLF & CRLF
+    msg = msg & "Local AI Document Assistant for LibreOffice" & CRLF
+    msg = msg & "Powered by Ollama" & CRLF & CRLF
+    msg = msg & "All processing is fully local." & CRLF
     msg = msg & "No data leaves your machine."
     MsgBox msg, vbInformation, "About " & APP_NAME
 End Sub
@@ -673,7 +674,7 @@ Private Function ExtractResponseContent(ByVal json As String) As String
         Dim result As String
         result = raw
         result = Replace(result, "\\", Chr(1))
-        result = Replace(result, "\n", vbCrLf)
+        result = Replace(result, "\n", CRLF)
         result = Replace(result, "\t", vbTab)
         result = Replace(result, "\r", vbCr)
         result = Replace(result, "\""", """")
@@ -716,7 +717,7 @@ Private Function EscapeJson(ByVal text As String) As String
     result = text
     result = Replace(result, "\", "\\")
     result = Replace(result, """", "\""")
-    result = Replace(result, vbCrLf, "\\n")
+    result = Replace(result, CRLF, "\\n")
     result = Replace(result, vbCr, "\\r")
     result = Replace(result, vbLf, "\\n")
     result = Replace(result, vbTab, "\\t")
@@ -818,7 +819,7 @@ Public Sub Ollama_AnalyzeScreenshot()
     On Error GoTo ScreenshotError
 
     If Not Ollama_IsOllamaRunning() Then
-        MsgBox "Ollama is not running." & vbCrLf & vbCrLf & "Please start Ollama and try again.", vbExclamation, APP_NAME
+        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", vbExclamation, APP_NAME
         Exit Sub
     End If
 
@@ -857,7 +858,7 @@ Public Sub Ollama_AnalyzeScreenshot()
             InsertResponseIntoDocument response, doc
         End If
     Else
-        MsgBox "No response received from Ollama." & vbCrLf & vbCrLf & "Check that:" & vbCrLf & "  - Ollama is running" & vbCrLf & "  - The selected model supports vision (e.g., llama3.2-vision, llava)", vbExclamation, APP_NAME
+        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running" & CRLF & "  - The selected model supports vision (e.g., llama3.2-vision, llava)", vbExclamation, APP_NAME
     End If
 
     Exit Sub

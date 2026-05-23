@@ -49,6 +49,8 @@ Public Sub Ollama_Initialize()
     End If
 
     MsgBox APP_NAME & " v" & APP_VERSION & " initialized." & CRLF & CRLF & "Run Tools > Macros > Ollama_ProcessDocument to use.", 64, APP_NAME
+
+    Ollama_InstallMenu
 End Sub
 
 '====================================================================
@@ -59,12 +61,26 @@ Public Function Ollama_IsOllamaRunning() As Boolean
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
     http.Open "GET", OLLAMA_BASE_URL & "/api/tags", False
-    http.SetTimeouts 5000, 5000, 5000, 5000
-    http.SetOption 0, "Ollama-LibreOffice-AI/1.0"
     http.Send
     Ollama_IsOllamaRunning = (http.Status = 200)
     Exit Function
 NotRunning:
+    On Error Resume Next
+    Dim fallback As Object
+    Set fallback = CreateObject("Msxml2.XMLHTTP.6.0")
+    If Err.Number <> 0 Then
+        Set fallback = CreateObject("Microsoft.XMLHTTP")
+    End If
+    If fallback Is Nothing Then
+        Ollama_IsOllamaRunning = False
+        Exit Function
+    End If
+    On Error GoTo NotRunning2
+    fallback.Open "GET", OLLAMA_BASE_URL & "/api/tags", False
+    fallback.Send
+    Ollama_IsOllamaRunning = (fallback.Status = 200)
+    Exit Function
+NotRunning2:
     Ollama_IsOllamaRunning = False
 End Function
 
@@ -943,6 +959,124 @@ Private Function Ollama_ProcessVisionRequest(ByVal systemPrompt As String, ByVal
 VisionError:
     Ollama_ProcessVisionRequest = ""
 End Function
+
+'====================================================================
+' Install/Uninstall Ollama AI Menu Group
+'====================================================================
+Public Sub Ollama_InstallMenu()
+    On Error GoTo MenuInstallError
+    Dim configDir As String
+    configDir = Environ("APPDATA") & "\LibreOffice\4\user\config"
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(configDir) Then
+        fso.CreateFolder configDir
+    End If
+
+    Dim addonsPath As String
+    addonsPath = configDir & "\Addons.xcu"
+
+    Dim existing As String
+    existing = ""
+    If fso.FileExists(addonsPath) Then
+        Dim ts As Object
+        Set ts = fso.OpenTextFile(addonsPath, 1)
+        existing = ts.ReadAll
+        ts.Close
+    End If
+
+    If InStr(existing, "OllamaAI") > 0 Then
+        Exit Sub
+    End If
+
+    Dim newContent As String
+    newContent = "<?xml version=""1.0"" encoding=""UTF-8""?>" & CRLF
+    newContent = newContent & "<oor:node xmlns:oor=""http://openoffice.org/2001/registry"" xmlns:xs=""http://www.w3.org/2001/XMLSchema"" oor:name=""Addons"" oor:package=""org.openoffice.Office"">" & CRLF
+    newContent = newContent & "<node oor:name=""AddonUI"">" & CRLF
+    newContent = newContent & "<node oor:name=""AddonMenu"">" & CRLF
+    newContent = newContent & "<node oor:name=""OllamaAI"" oor:op=""fuse"">" & CRLF
+    newContent = newContent & "<prop oor:name=""Title""><value xml:lang=""en-US"">Ollama AI</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""URL""><value>service:com.sun.star.frame.SetProperty?Hidden:=true</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""Target""><value>_self</value></prop>" & CRLF
+    newContent = newContent & "<node oor:name=""SubItems"">" & CRLF
+    newContent = newContent & "<node oor:name=""ProcessDocument"" oor:op=""fuse"">" & CRLF
+    newContent = newContent & "<prop oor:name=""Title""><value xml:lang=""en-US"">Process Document</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""URL""><value>macro:///Standard.OllamaAI.Ollama_ProcessDocument</value></prop>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "<node oor:name=""AnalyzeScreenshot"" oor:op=""fuse"">" & CRLF
+    newContent = newContent & "<prop oor:name=""Title""><value xml:lang=""en-US"">Analyze Screenshot/Image</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""URL""><value>macro:///Standard.OllamaAI.Ollama_AnalyzeScreenshot</value></prop>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "<node oor:name=""Configuration"" oor:op=""fuse"">" & CRLF
+    newContent = newContent & "<prop oor:name=""Title""><value xml:lang=""en-US"">Configuration</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""URL""><value>macro:///Standard.OllamaAI.Ollama_ShowConfigurationForm</value></prop>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "<node oor:name=""About"" oor:op=""fuse"">" & CRLF
+    newContent = newContent & "<prop oor:name=""Title""><value xml:lang=""en-US"">About</value></prop>" & CRLF
+    newContent = newContent & "<prop oor:name=""URL""><value>macro:///Standard.OllamaAI.Ollama_ShowAboutForm</value></prop>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "</node>" & CRLF
+    newContent = newContent & "</oor:node>"
+
+    Dim fullContent As String
+    If existing <> "" Then
+        fullContent = Left(existing, Len(existing) - Len("</oor:node>"))
+        fullContent = fullContent & newContent
+    Else
+        fullContent = newContent
+    End If
+
+    Set ts = fso.CreateTextFile(addonsPath, True)
+    ts.Write fullContent
+    ts.Close
+
+    Exit Sub
+
+MenuInstallError:
+End Sub
+
+Public Sub Ollama_UninstallMenu()
+    On Error Resume Next
+    Dim configDir As String
+    configDir = Environ("APPDATA") & "\LibreOffice\4\user\config"
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim addonsPath As String
+    addonsPath = configDir & "\Addons.xcu"
+    If Not fso.FileExists(addonsPath) Then
+        Exit Sub
+    End If
+    Dim ts As Object
+    Set ts = fso.OpenTextFile(addonsPath, 1)
+    Dim content As String
+    content = ts.ReadAll
+    ts.Close
+
+    Dim startPos As Long
+    startPos = InStr(content, "<node oor:name=""OllamaAI""")
+    If startPos = 0 Then
+        Exit Sub
+    End If
+
+    Dim endPos As Long
+    endPos = InStr(startPos, content, "</node>" & CRLF & "</node>" & CRLF & "</node>" & CRLF & "</node>")
+    If endPos = 0 Then
+        endPos = InStr(startPos, content, "</oor:node>")
+        If endPos > 0 Then
+            endPos = endPos - 1
+        End If
+    End If
+    If endPos > startPos Then
+        content = Left(content, startPos - 1) & Mid(content, endPos + Len("</node>" & CRLF & "</node>" & CRLF & "</node>" & CRLF & "</node>"))
+    End If
+    Set ts = fso.CreateTextFile(addonsPath, True)
+    ts.Write content
+    ts.Close
+End Sub
 
 '====================================================================
 ' End of Module

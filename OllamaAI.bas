@@ -29,7 +29,9 @@ Private Const OLLAMA_BASE_URL As String = "http://localhost:11434"
 Private Const OLLAMA_DEFAULT_MODEL As String = "qwen2.5-coder:7b"
 Private Const REQUEST_TIMEOUT_SECS As Long = 120
 Private Const REG_PATH_ROOT As String = "HKEY_CURRENT_USER\Software\OllamaLibreOfficeAI"
-Private Const CRLF As String = Chr(13) + Chr(10)
+Private Function CRLF() As String
+    CRLF = Chr(13) + Chr(10)
+End Function
 
 '====================================================================
 ' Initialization - Run once after import to create default settings
@@ -46,7 +48,7 @@ Public Sub Ollama_Initialize()
         SaveRegSetting "ApiKey", ""
     End If
 
-    MsgBox APP_NAME & " v" & APP_VERSION & " initialized." & CRLF & CRLF & "Run Tools > Macros > Ollama_ProcessDocument to use.", vbInformation, APP_NAME
+    MsgBox APP_NAME & " v" & APP_VERSION & " initialized." & CRLF & CRLF & "Run Tools > Macros > Ollama_ProcessDocument to use.", 64, APP_NAME
 End Sub
 
 '====================================================================
@@ -143,7 +145,7 @@ Public Sub Ollama_ProcessDocument()
     On Error GoTo ProcessError
 
     If Not Ollama_IsOllamaRunning() Then
-        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", vbExclamation, APP_NAME
+        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", 48, APP_NAME
         Exit Sub
     End If
 
@@ -151,7 +153,7 @@ Public Sub Ollama_ProcessDocument()
     doc = ThisComponent
 
     If doc Is Nothing Then
-        MsgBox "No document is open.", vbExclamation, APP_NAME
+        MsgBox "No document is open.", 48, APP_NAME
         Exit Sub
     End If
 
@@ -168,12 +170,12 @@ Public Sub Ollama_ProcessDocument()
         docType = "Impress"
         docText = GetImpressDocumentText(doc)
     Else
-        MsgBox "Unsupported document type. Only Writer, Calc, and Impress are supported.", vbExclamation, APP_NAME
+        MsgBox "Unsupported document type. Only Writer, Calc, and Impress are supported.", 48, APP_NAME
         Exit Sub
     End If
 
     If docText = "" Then
-        MsgBox "No text content found in the document.", vbExclamation, APP_NAME
+        MsgBox "No text content found in the document.", 48, APP_NAME
         Exit Sub
     End If
 
@@ -197,18 +199,18 @@ Public Sub Ollama_ProcessDocument()
 
     If response <> "" Then
         If Left(response, 1) = "[" And InStr(response, "Ollama Error:") > 0 Then
-            MsgBox response, vbExclamation, APP_NAME
+            MsgBox response, 48, APP_NAME
         Else
             InsertResponseIntoDocument response, doc
         End If
     Else
-        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running (ollama list)" & CRLF & "  - The selected model is downloaded" & CRLF & "  - Your model name matches exactly", vbExclamation, APP_NAME
+        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running (ollama list)" & CRLF & "  - The selected model is downloaded" & CRLF & "  - Your model name matches exactly", 48, APP_NAME
     End If
 
     Exit Sub
 
 ProcessError:
-    MsgBox "Error processing document: " & Err.Description, vbCritical, APP_NAME
+    MsgBox "Error processing document: " & Err.Description, 16, APP_NAME
 End Sub
 
 '====================================================================
@@ -366,10 +368,10 @@ Private Sub InsertResponseIntoDocument(ByVal responseText As String, ByVal doc A
             If curSel.supportsService("com.sun.star.drawing.TextShape") Then
                 curSel.String = curSel.String & CRLF & responseText
             Else
-                MsgBox "Select a text box on the slide first, then run the macro.", vbInformation, APP_NAME
+                MsgBox "Select a text box on the slide first, then run the macro.", 64, APP_NAME
             End If
         Else
-            MsgBox "Select a text box on the slide first, then run the macro.", vbInformation, APP_NAME
+            MsgBox "Select a text box on the slide first, then run the macro.", 64, APP_NAME
         End If
     End If
 End Sub
@@ -514,13 +516,13 @@ Public Sub Ollama_ShowConfigurationForm()
             SaveRegSetting "ApiKey", apiKeyVal
         End If
 
-        MsgBox "Settings saved successfully.", vbInformation, APP_NAME
+        MsgBox "Settings saved successfully.", 64, APP_NAME
     End If
 
     Exit Sub
 
 ConfigFormError:
-    MsgBox "Could not open configuration form: " & Err.Description, vbExclamation, APP_NAME
+    MsgBox "Could not open configuration form: " & Err.Description, 48, APP_NAME
 End Sub
 
 '====================================================================
@@ -533,7 +535,7 @@ Public Sub Ollama_ShowAboutForm()
     msg = msg & "Powered by Ollama" & CRLF & CRLF
     msg = msg & "All processing is fully local." & CRLF
     msg = msg & "No data leaves your machine."
-    MsgBox msg, vbInformation, "About " & APP_NAME
+    MsgBox msg, 64, "About " & APP_NAME
 End Sub
 
 '====================================================================
@@ -675,8 +677,8 @@ Private Function ExtractResponseContent(ByVal json As String) As String
         result = raw
         result = Replace(result, "\\", Chr(1))
         result = Replace(result, "\n", CRLF)
-        result = Replace(result, "\t", vbTab)
-        result = Replace(result, "\r", vbCr)
+        result = Replace(result, "\t", Chr(9))
+        result = Replace(result, "\r", Chr(13))
         result = Replace(result, "\""", """")
         result = Replace(result, Chr(1), "\")
         ExtractResponseContent = result
@@ -718,9 +720,9 @@ Private Function EscapeJson(ByVal text As String) As String
     result = Replace(result, "\", "\\")
     result = Replace(result, """", "\""")
     result = Replace(result, CRLF, "\\n")
-    result = Replace(result, vbCr, "\\r")
-    result = Replace(result, vbLf, "\\n")
-    result = Replace(result, vbTab, "\\t")
+    result = Replace(result, Chr(13), "\\r")
+    result = Replace(result, Chr(10), "\\n")
+    result = Replace(result, Chr(9), "\\t")
     EscapeJson = result
 End Function
 
@@ -819,14 +821,14 @@ Public Sub Ollama_AnalyzeScreenshot()
     On Error GoTo ScreenshotError
 
     If Not Ollama_IsOllamaRunning() Then
-        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", vbExclamation, APP_NAME
+        MsgBox "Ollama is not running." & CRLF & CRLF & "Please start Ollama and try again.", 48, APP_NAME
         Exit Sub
     End If
 
     Dim doc As Object
     doc = ThisComponent
     If doc Is Nothing Then
-        MsgBox "No document is open.", vbExclamation, APP_NAME
+        MsgBox "No document is open.", 48, APP_NAME
         Exit Sub
     End If
 
@@ -853,18 +855,18 @@ Public Sub Ollama_AnalyzeScreenshot()
 
     If response <> "" Then
         If Left(response, 1) = "[" And InStr(response, "Ollama Error:") > 0 Then
-            MsgBox response, vbExclamation, APP_NAME
+            MsgBox response, 48, APP_NAME
         Else
             InsertResponseIntoDocument response, doc
         End If
     Else
-        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running" & CRLF & "  - The selected model supports vision (e.g., llama3.2-vision, llava)", vbExclamation, APP_NAME
+        MsgBox "No response received from Ollama." & CRLF & CRLF & "Check that:" & CRLF & "  - Ollama is running" & CRLF & "  - The selected model supports vision (e.g., llama3.2-vision, llava)", 48, APP_NAME
     End If
 
     Exit Sub
 
 ScreenshotError:
-    MsgBox "Error analyzing screenshot: " & Err.Description, vbCritical, APP_NAME
+    MsgBox "Error analyzing screenshot: " & Err.Description, 16, APP_NAME
 End Sub
 
 '====================================================================
